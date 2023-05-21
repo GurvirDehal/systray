@@ -1,3 +1,4 @@
+//go:build windows
 // +build windows
 
 package systray
@@ -5,12 +6,14 @@ package systray
 import (
 	"crypto/md5"
 	"encoding/hex"
-	"io/ioutil"
+	"log"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -111,7 +114,7 @@ type notifyIconData struct {
 	Tip                        [128]uint16
 	State, StateMask           uint32
 	Info                       [256]uint16
-	Timeout, Version           uint32
+	Version                    uint32
 	InfoTitle                  [64]uint16
 	InfoFlags                  uint32
 	GuidItem                   windows.GUID
@@ -202,6 +205,8 @@ type winTray struct {
 
 	wmSystrayMessage,
 	wmTaskbarCreated uint32
+
+	guid windows.GUID
 }
 
 // Loads an image from file and shows it in tray.
@@ -298,6 +303,7 @@ func (t *winTray) wndProc(hWnd windows.Handle, message uint32, wParam, lParam ui
 }
 
 func (t *winTray) initInstance() error {
+	rand.Seed(time.Now().UnixNano())
 	const IDI_APPLICATION = 32512
 	const IDC_ARROW = 32512 // Standard arrow
 	// https://msdn.microsoft.com/en-us/library/windows/desktop/ms633548(v=vs.85).aspx
@@ -323,13 +329,14 @@ func (t *winTray) initInstance() error {
 
 	// https://msdn.microsoft.com/en-us/library/windows/desktop/ms644931(v=vs.85).aspx
 	const WM_USER = 0x0400
+	const WM_APP = 0x8000
 
 	const (
 		className  = "SystrayClass"
 		windowName = ""
 	)
 
-	t.wmSystrayMessage = WM_USER + 1
+	t.wmSystrayMessage = WM_APP + 1
 	t.visibleItems = make(map[uint32][]uint32)
 	t.menus = make(map[uint32]windows.Handle)
 	t.menuOf = make(map[uint32]windows.Handle)
@@ -415,14 +422,15 @@ func (t *winTray) initInstance() error {
 	pUpdateWindow.Call(
 		uintptr(t.window),
 	)
-
+	t.guid = newGUID()
 	t.muNID.Lock()
 	defer t.muNID.Unlock()
+	const NIF_GUID = 0x00000020
 	t.nid = &notifyIconData{
 		Wnd:             windows.Handle(t.window),
-		ID:              100,
-		Flags:           NIF_MESSAGE,
+		Flags:           NIF_GUID | NIF_MESSAGE,
 		CallbackMessage: t.wmSystrayMessage,
+		GuidItem:        t.guid,
 	}
 	t.nid.Size = uint32(unsafe.Sizeof(*t.nid))
 
@@ -766,12 +774,12 @@ func (t *winTray) iconToBitmap(hIcon windows.Handle) (windows.Handle, error) {
 
 func registerSystray() {
 	if err := wt.initInstance(); err != nil {
-		log.Errorf("Unable to init instance: %v", err)
+		log.Printf("Unable to init instance: %v\n", err)
 		return
 	}
 
 	if err := wt.createMenu(); err != nil {
-		log.Errorf("Unable to create menu: %v", err)
+		log.Printf("Unable to create menu: %v\n", err)
 		return
 	}
 
@@ -797,7 +805,7 @@ func nativeLoop() {
 		// https://msdn.microsoft.com/en-us/library/windows/desktop/ms644936(v=vs.85).aspx
 		switch int32(ret) {
 		case -1:
-			log.Errorf("Error at message loop: %v", err)
+			log.Printf("Error at message loop: %v\n", err)
 			return
 		case 0:
 			return
@@ -825,7 +833,7 @@ func iconBytesToFilePath(iconBytes []byte) (string, error) {
 	iconFilePath := filepath.Join(os.TempDir(), "systray_temp_icon_"+dataHash)
 
 	if _, err := os.Stat(iconFilePath); os.IsNotExist(err) {
-		if err := ioutil.WriteFile(iconFilePath, iconBytes, 0644); err != nil {
+		if err := os.WriteFile(iconFilePath, iconBytes, 0644); err != nil {
 			return "", err
 		}
 	}
@@ -835,14 +843,9 @@ func iconBytesToFilePath(iconBytes []byte) (string, error) {
 // SetIcon sets the systray icon.
 // iconBytes should be the content of .ico for windows and .ico/.jpg/.png
 // for other platforms.
-func SetIcon(iconBytes []byte) {
-	iconFilePath, err := iconBytesToFilePath(iconBytes)
-	if err != nil {
-		log.Errorf("Unable to write icon data to temp file: %v", err)
-		return
-	}
+func SetIcon(iconFilePath string) {
 	if err := wt.setIcon(iconFilePath); err != nil {
-		log.Errorf("Unable to set icon: %v", err)
+		log.Printf("Unable to set icon: %v\n", err)
 		return
 	}
 }
@@ -851,8 +854,8 @@ func SetIcon(iconBytes []byte) {
 // to a regular icon on other platforms.
 // templateIconBytes and iconBytes should be the content of .ico for windows and
 // .ico/.jpg/.png for other platforms.
-func SetTemplateIcon(templateIconBytes []byte, regularIconBytes []byte) {
-	SetIcon(regularIconBytes)
+func SetTemplateIcon(templateIconPath string, regularIconPath string) {
+	SetIcon(regularIconPath)
 }
 
 // SetTitle sets the systray title, only available on Mac and Linux.
@@ -869,22 +872,16 @@ func (item *MenuItem) parentId() uint32 {
 
 // SetIcon sets the icon of a menu item. Only works on macOS and Windows.
 // iconBytes should be the content of .ico/.jpg/.png
-func (item *MenuItem) SetIcon(iconBytes []byte) {
-	iconFilePath, err := iconBytesToFilePath(iconBytes)
-	if err != nil {
-		log.Errorf("Unable to write icon data to temp file: %v", err)
-		return
-	}
-
+func (item *MenuItem) SetIcon(iconFilePath string) {
 	h, err := wt.loadIconFrom(iconFilePath)
 	if err != nil {
-		log.Errorf("Unable to load icon from temp file: %v", err)
+		log.Printf("Unable to load icon from file: %v\n", err)
 		return
 	}
 
 	h, err = wt.iconToBitmap(h)
 	if err != nil {
-		log.Errorf("Unable to convert icon to bitmap: %v", err)
+		log.Printf("Unable to convert icon to bitmap: %v\n", err)
 		return
 	}
 	wt.muMenuItemIcons.Lock()
@@ -893,7 +890,7 @@ func (item *MenuItem) SetIcon(iconBytes []byte) {
 
 	err = wt.addOrUpdateMenuItem(uint32(item.id), item.parentId(), item.title, item.disabled, item.checked)
 	if err != nil {
-		log.Errorf("Unable to addOrUpdateMenuItem: %v", err)
+		log.Printf("Unable to addOrUpdateMenuItem: %v\n", err)
 		return
 	}
 }
@@ -902,7 +899,7 @@ func (item *MenuItem) SetIcon(iconBytes []byte) {
 // only available on Mac and Windows.
 func SetTooltip(tooltip string) {
 	if err := wt.setTooltip(tooltip); err != nil {
-		log.Errorf("Unable to set tooltip: %v", err)
+		log.Printf("Unable to set tooltip: %v\n", err)
 		return
 	}
 }
@@ -910,7 +907,7 @@ func SetTooltip(tooltip string) {
 func addOrUpdateMenuItem(item *MenuItem) {
 	err := wt.addOrUpdateMenuItem(uint32(item.id), item.parentId(), item.title, item.disabled, item.checked)
 	if err != nil {
-		log.Errorf("Unable to addOrUpdateMenuItem: %v", err)
+		log.Printf("Unable to addOrUpdateMenuItem: %v\n", err)
 		return
 	}
 }
@@ -919,14 +916,14 @@ func addOrUpdateMenuItem(item *MenuItem) {
 // falls back to the regular icon bytes and on Linux it does nothing.
 // templateIconBytes and regularIconBytes should be the content of .ico for windows and
 // .ico/.jpg/.png for other platforms.
-func (item *MenuItem) SetTemplateIcon(templateIconBytes []byte, regularIconBytes []byte) {
-	item.SetIcon(regularIconBytes)
+func (item *MenuItem) SetTemplateIcon(templateIconPath string, regularIconPath string) {
+	item.SetIcon(regularIconPath)
 }
 
 func addSeparator(id uint32) {
 	err := wt.addSeparatorMenuItem(id, 0)
 	if err != nil {
-		log.Errorf("Unable to addSeparator: %v", err)
+		log.Printf("Unable to addSeparator: %v\n", err)
 		return
 	}
 }
@@ -934,11 +931,49 @@ func addSeparator(id uint32) {
 func hideMenuItem(item *MenuItem) {
 	err := wt.hideMenuItem(uint32(item.id), item.parentId())
 	if err != nil {
-		log.Errorf("Unable to hideMenuItem: %v", err)
+		log.Printf("Unable to hideMenuItem: %v\n", err)
 		return
 	}
 }
 
 func showMenuItem(item *MenuItem) {
 	addOrUpdateMenuItem(item)
+}
+
+func (t *winTray) initData() *notifyIconData {
+	t.muNID.Lock()
+	defer t.muNID.Unlock()
+	const NIF_GUID = 0x00000020
+	var data notifyIconData
+	data.Size = uint32(unsafe.Sizeof(data))
+	data.Flags = NIF_GUID
+	data.Wnd = t.window
+	data.GuidItem = t.guid
+	return &data
+}
+
+func (t *winTray) showBalloonNotification(title string, text string) error {
+	const NIF_INFO = 0x00000010
+
+	data := t.initData()
+	data.Flags |= NIF_INFO
+	if title != "" {
+		copy(data.InfoTitle[:], windows.StringToUTF16(title))
+	}
+	copy(data.Info[:], windows.StringToUTF16(text))
+	err := data.modify()
+	return err
+}
+
+func ShowNotification(title string, text string) {
+	err := wt.showBalloonNotification(title, text)
+	if err != nil {
+		log.Println(err)
+	}
+}
+
+func newGUID() windows.GUID {
+	var buf [16]byte
+	rand.Read(buf[:])
+	return *(*windows.GUID)(unsafe.Pointer(&buf[0]))
 }
