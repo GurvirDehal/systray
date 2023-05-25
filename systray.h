@@ -15,3 +15,4 @@ void add_separator(int menuId);
 void hide_menu_item(int menuId);
 void show_menu_item(int menuId);
 void quit();
+void showNotification(char* title, char* text);

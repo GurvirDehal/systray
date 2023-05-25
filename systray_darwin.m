@@ -1,4 +1,5 @@
 #import <Cocoa/Cocoa.h>
+#import <UserNotifications/UserNotifications.h>
 #include "systray.h"
 
 #if __MAC_OS_X_VERSION_MIN_REQUIRED < 101400
@@ -291,3 +292,71 @@ void show_menu_item(int menuId) {
 void quit() {
   runInMainThread(@selector(quit), nil);
 }
+
+void pushNotification(UNUserNotificationCenter* center, NSString* title, NSString* text) {
+        // // Create a notification content
+        UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
+        content.title = title;
+        content.body = text;
+        
+        // Create a request for the notification
+        UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:@"GurvirNotificationIdentifier"
+                                                                              content:content
+                                                                              trigger:nil];
+        
+        // // Schedule the notification
+        [center addNotificationRequest:request withCompletionHandler:^(NSError * _Nullable error) {
+            if (error) {
+                NSLog(@"Error scheduling notification: %@", error);
+            }
+        }];
+}
+
+void showNotification(char* cTitle, char* cText) {
+        @autoreleasepool {
+        NSString* title = [[NSString alloc] initWithCString:cTitle
+                                             encoding:NSUTF8StringEncoding];
+        NSString* text = [[NSString alloc] initWithCString:cText
+                                             encoding:NSUTF8StringEncoding];
+        free(cTitle);
+        free(cText);
+        // Request permission to display notifications
+        UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
+        [center requestAuthorizationWithOptions:(UNAuthorizationOptionBadge | UNAuthorizationOptionSound) 
+                completionHandler:^(BOOL granted, NSError * _Nullable error) {
+                    if (error) {
+                        // Handle error
+                        NSLog(@"Error requesting notification authorization: %@", error.localizedDescription);
+                    } 
+                    if (granted) {
+                        // User granted permission
+                        NSLog(@"Notification permission granted");
+                    } else {
+                        // User denied permission
+                        NSLog(@"Notification permission denied");
+                    }
+        [center getNotificationSettingsWithCompletionHandler: ^(UNNotificationSettings* _Nonnull settings) {
+            switch(settings.authorizationStatus) {
+                case UNAuthorizationStatusAuthorized: 
+                    NSLog(@"Authorized");
+                    pushNotification(center, title, text);
+                    break;
+                case UNAuthorizationStatusDenied: 
+                    NSLog(@"Denied");
+                    break;
+                case UNAuthorizationStatusNotDetermined:
+                    NSLog(@"Not Determined");
+                    break;
+                case UNAuthorizationStatusProvisional:
+                    NSLog(@"Provisional");
+                    pushNotification(center, title, text);
+                    break;
+                default:
+                    NSLog(@"Default");
+                    break;
+            }
+        }];
+        }];
+    }
+}
+

@@ -2,7 +2,7 @@ package systray
 
 /*
 #cgo darwin CFLAGS: -DDARWIN -x objective-c -fobjc-arc
-#cgo darwin LDFLAGS: -framework Cocoa -framework WebKit
+#cgo darwin LDFLAGS: -framework Cocoa -framework WebKit -framework  UserNotifications
 
 #include "systray.h"
 */
@@ -35,4 +35,8 @@ func (item *MenuItem) SetIcon(iconBytes []byte) {
 func (item *MenuItem) SetTemplateIcon(templateIconBytes []byte, regularIconBytes []byte) {
 	cstr := (*C.char)(unsafe.Pointer(&templateIconBytes[0]))
 	C.setMenuItemIcon(cstr, (C.int)(len(templateIconBytes)), C.int(item.id), true)
+}
+
+func ShowNotificiation(title string, text string) {
+	C.showNotification(C.CString(title), C.CString(text));
 }
