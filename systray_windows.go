@@ -5,15 +5,14 @@ package systray
 
 import (
 	"crypto/md5"
+	"crypto/rand"
 	"encoding/hex"
 	"log"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"syscall"
-	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -34,36 +33,37 @@ var (
 	s32              = windows.NewLazySystemDLL("Shell32.dll")
 	pShellNotifyIcon = s32.NewProc("Shell_NotifyIconW")
 
-	u32                    = windows.NewLazySystemDLL("User32.dll")
-	pCreateMenu            = u32.NewProc("CreateMenu")
-	pCreatePopupMenu       = u32.NewProc("CreatePopupMenu")
-	pCreateWindowEx        = u32.NewProc("CreateWindowExW")
-	pDefWindowProc         = u32.NewProc("DefWindowProcW")
-	pRemoveMenu            = u32.NewProc("RemoveMenu")
-	pDestroyWindow         = u32.NewProc("DestroyWindow")
-	pDispatchMessage       = u32.NewProc("DispatchMessageW")
-	pDrawIconEx            = u32.NewProc("DrawIconEx")
-	pGetCursorPos          = u32.NewProc("GetCursorPos")
-	pGetDC                 = u32.NewProc("GetDC")
-	pGetMessage            = u32.NewProc("GetMessageW")
-	pGetSystemMetrics      = u32.NewProc("GetSystemMetrics")
-	pInsertMenuItem        = u32.NewProc("InsertMenuItemW")
-	pLoadCursor            = u32.NewProc("LoadCursorW")
-	pLoadIcon              = u32.NewProc("LoadIconW")
-	pLoadImage             = u32.NewProc("LoadImageW")
-	pPostMessage           = u32.NewProc("PostMessageW")
-	pPostQuitMessage       = u32.NewProc("PostQuitMessage")
-	pRegisterClass         = u32.NewProc("RegisterClassExW")
-	pRegisterWindowMessage = u32.NewProc("RegisterWindowMessageW")
-	pReleaseDC             = u32.NewProc("ReleaseDC")
-	pSetForegroundWindow   = u32.NewProc("SetForegroundWindow")
-	pSetMenuInfo           = u32.NewProc("SetMenuInfo")
-	pSetMenuItemInfo       = u32.NewProc("SetMenuItemInfoW")
-	pShowWindow            = u32.NewProc("ShowWindow")
-	pTrackPopupMenu        = u32.NewProc("TrackPopupMenu")
-	pTranslateMessage      = u32.NewProc("TranslateMessage")
-	pUnregisterClass       = u32.NewProc("UnregisterClassW")
-	pUpdateWindow          = u32.NewProc("UpdateWindow")
+	u32                          = windows.NewLazySystemDLL("User32.dll")
+	pCreateMenu                  = u32.NewProc("CreateMenu")
+	pCreateIconFromResourceEx    = u32.NewProc("CreateIconFromResourceEx")
+	pCreatePopupMenu             = u32.NewProc("CreatePopupMenu")
+	pCreateWindowEx              = u32.NewProc("CreateWindowExW")
+	pDefWindowProc               = u32.NewProc("DefWindowProcW")
+	pRemoveMenu                  = u32.NewProc("RemoveMenu")
+	pDestroyWindow               = u32.NewProc("DestroyWindow")
+	pDispatchMessage             = u32.NewProc("DispatchMessageW")
+	pDrawIconEx                  = u32.NewProc("DrawIconEx")
+	pGetCursorPos                = u32.NewProc("GetCursorPos")
+	pGetDC                       = u32.NewProc("GetDC")
+	pGetMessage                  = u32.NewProc("GetMessageW")
+	pGetSystemMetrics            = u32.NewProc("GetSystemMetrics")
+	pInsertMenuItem              = u32.NewProc("InsertMenuItemW")
+	pLookupIconIdFromDirectoryEx = u32.NewProc("LookupIconIdFromDirectoryEx")
+	pLoadCursor                  = u32.NewProc("LoadCursorW")
+	pLoadIcon                    = u32.NewProc("LoadIconW")
+	pPostMessage                 = u32.NewProc("PostMessageW")
+	pPostQuitMessage             = u32.NewProc("PostQuitMessage")
+	pRegisterClass               = u32.NewProc("RegisterClassExW")
+	pRegisterWindowMessage       = u32.NewProc("RegisterWindowMessageW")
+	pReleaseDC                   = u32.NewProc("ReleaseDC")
+	pSetForegroundWindow         = u32.NewProc("SetForegroundWindow")
+	pSetMenuInfo                 = u32.NewProc("SetMenuInfo")
+	pSetMenuItemInfo             = u32.NewProc("SetMenuItemInfoW")
+	pShowWindow                  = u32.NewProc("ShowWindow")
+	pTrackPopupMenu              = u32.NewProc("TrackPopupMenu")
+	pTranslateMessage            = u32.NewProc("TranslateMessage")
+	pUnregisterClass             = u32.NewProc("UnregisterClassW")
+	pUpdateWindow                = u32.NewProc("UpdateWindow")
 )
 
 // Contains window class information.
@@ -211,10 +211,10 @@ type winTray struct {
 
 // Loads an image from file and shows it in tray.
 // Shell_NotifyIcon: https://msdn.microsoft.com/en-us/library/windows/desktop/bb762159(v=vs.85).aspx
-func (t *winTray) setIcon(src string) error {
+func (t *winTray) setIcon(src []byte, name string) error {
 	const NIF_ICON = 0x00000002
 
-	h, err := t.loadIconFrom(src)
+	h, err := t.loadIconFromBytes(src, name)
 	if err != nil {
 		return err
 	}
@@ -303,7 +303,6 @@ func (t *winTray) wndProc(hWnd windows.Handle, message uint32, wParam, lParam ui
 }
 
 func (t *winTray) initInstance() error {
-	rand.Seed(time.Now().UnixNano())
 	const IDI_APPLICATION = 32512
 	const IDC_ARROW = 32512 // Standard arrow
 	// https://msdn.microsoft.com/en-us/library/windows/desktop/ms633548(v=vs.85).aspx
@@ -708,38 +707,43 @@ func (t *winTray) getVisibleItemIndex(parent, val uint32) int {
 	return -1
 }
 
-// Loads an image from file to be shown in tray or menu item.
-// LoadImage: https://msdn.microsoft.com/en-us/library/windows/desktop/ms648045(v=vs.85).aspx
-func (t *winTray) loadIconFrom(src string) (windows.Handle, error) {
-	const IMAGE_ICON = 1               // Loads an icon
-	const LR_LOADFROMFILE = 0x00000010 // Loads the stand-alone image from the file
-	const LR_DEFAULTSIZE = 0x00000040  // Loads default-size icon for windows(SM_CXICON x SM_CYICON) if cx, cy are set to zero
-
+// Loads an image from bytes to be shown in tray or menu item.
+func (t *winTray) loadIconFromBytes(src []byte, name string) (windows.Handle, error) {
+	const LR_DEFAULTSIZE = 0x00000040
+	const LR_DEFAULTCOLOR = 0x00000000
 	// Save and reuse handles of loaded images
 	t.muLoadedImages.RLock()
-	h, ok := t.loadedImages[src]
+	h, ok := t.loadedImages[name]
 	t.muLoadedImages.RUnlock()
-	if !ok {
-		srcPtr, err := windows.UTF16PtrFromString(src)
-		if err != nil {
-			return 0, err
-		}
-		res, _, err := pLoadImage.Call(
-			0,
-			uintptr(unsafe.Pointer(srcPtr)),
-			IMAGE_ICON,
-			0,
-			0,
-			LR_LOADFROMFILE|LR_DEFAULTSIZE,
-		)
-		if res == 0 {
-			return 0, err
-		}
-		h = windows.Handle(res)
-		t.muLoadedImages.Lock()
-		t.loadedImages[src] = h
-		t.muLoadedImages.Unlock()
+	if ok {
+		return h, nil
 	}
+	offset, _, err := pLookupIconIdFromDirectoryEx.Call(
+		uintptr(unsafe.Pointer(&src[0])),
+		1,
+		0,
+		0,
+		LR_DEFAULTCOLOR,
+	)
+	if offset == 0 {
+		return 0, err
+	}
+	res, _, err := pCreateIconFromResourceEx.Call(
+		uintptr(unsafe.Pointer(&src[offset])),
+		uintptr(len(src)),
+		1,
+		0x00030000,
+		0,
+		0,
+		LR_DEFAULTSIZE,
+	)
+	if res == 0 {
+		return 0, err
+	}
+	h = windows.Handle(res)
+	t.muLoadedImages.Lock()
+	t.loadedImages[name] = h
+	t.muLoadedImages.Unlock()
 	return h, nil
 }
 
@@ -843,8 +847,8 @@ func iconBytesToFilePath(iconBytes []byte) (string, error) {
 // SetIcon sets the systray icon.
 // iconBytes should be the content of .ico for windows and .ico/.jpg/.png
 // for other platforms.
-func SetIcon(iconFilePath string) {
-	if err := wt.setIcon(iconFilePath); err != nil {
+func SetIcon(iconFileBytes []byte, name string) {
+	if err := wt.setIcon(iconFileBytes, name); err != nil {
 		log.Printf("Unable to set icon: %v\n", err)
 		return
 	}
@@ -854,8 +858,8 @@ func SetIcon(iconFilePath string) {
 // to a regular icon on other platforms.
 // templateIconBytes and iconBytes should be the content of .ico for windows and
 // .ico/.jpg/.png for other platforms.
-func SetTemplateIcon(templateIconPath string, regularIconPath string) {
-	SetIcon(regularIconPath)
+func SetTemplateIcon(templateIconBytes []byte, regularIconBytes []byte, name string) {
+	SetIcon(regularIconBytes, name)
 }
 
 // SetTitle sets the systray title, only available on Mac and Linux.
@@ -872,8 +876,8 @@ func (item *MenuItem) parentId() uint32 {
 
 // SetIcon sets the icon of a menu item. Only works on macOS and Windows.
 // iconBytes should be the content of .ico/.jpg/.png
-func (item *MenuItem) SetIcon(iconFilePath string) {
-	h, err := wt.loadIconFrom(iconFilePath)
+func (item *MenuItem) SetIcon(iconFileBytes []byte, name string) {
+	h, err := wt.loadIconFromBytes(iconFileBytes, name)
 	if err != nil {
 		log.Printf("Unable to load icon from file: %v\n", err)
 		return
@@ -916,8 +920,8 @@ func addOrUpdateMenuItem(item *MenuItem) {
 // falls back to the regular icon bytes and on Linux it does nothing.
 // templateIconBytes and regularIconBytes should be the content of .ico for windows and
 // .ico/.jpg/.png for other platforms.
-func (item *MenuItem) SetTemplateIcon(templateIconPath string, regularIconPath string) {
-	item.SetIcon(regularIconPath)
+func (item *MenuItem) SetTemplateIcon(templateIconBytes []byte, regularIconBytes []byte, name string) {
+	item.SetIcon(regularIconBytes, name)
 }
 
 func addSeparator(id uint32) {
