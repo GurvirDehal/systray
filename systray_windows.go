@@ -51,7 +51,7 @@ var (
 	pLookupIconIdFromDirectoryEx = u32.NewProc("LookupIconIdFromDirectoryEx")
 	pLoadCursor                  = u32.NewProc("LoadCursorW")
 	pLoadIcon                    = u32.NewProc("LoadIconW")
-	pMessageBox 				 = u32.NewProc("MessageBox")
+	pMessageBox                  = u32.NewProc("MessageBoxW")
 	pPostMessage                 = u32.NewProc("PostMessageW")
 	pPostQuitMessage             = u32.NewProc("PostQuitMessage")
 	pRegisterClass               = u32.NewProc("RegisterClassExW")
@@ -986,13 +986,24 @@ func newGUID() windows.GUID {
 func ShowDialog(title string, text string) {
 	const MB_ICONERROR = 0x00000010
 	const MB_OK = 0x00000000
+	textPtr, err := windows.UTF16PtrFromString(text)
+	if err != nil {
+		log.Printf("Unable to convert text to UTF16: %v\n", err)
+		return
+	}
+	titlePtr, err := windows.UTF16PtrFromString(title)
+	if err != nil {
+		log.Printf("Unable to convert title to UTF16: %v\n", err)
+		return
+	}
 	res, _, err := pMessageBox.Call(
-		wt.window,
-		windows.StringToUTF16(text),
-		windows.StringToUTF16(title),
-		MB_OK | MB_ICONERROR
+		uintptr(wt.window),
+		uintptr(unsafe.Pointer(textPtr)),
+		uintptr(unsafe.Pointer(titlePtr)),
+		MB_OK|MB_ICONERROR,
 	)
 	if res == 0 {
 		log.Printf("Unable to show dialog: %v\n", err)
+		return
 	}
 }
