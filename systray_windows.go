@@ -51,6 +51,7 @@ var (
 	pLookupIconIdFromDirectoryEx = u32.NewProc("LookupIconIdFromDirectoryEx")
 	pLoadCursor                  = u32.NewProc("LoadCursorW")
 	pLoadIcon                    = u32.NewProc("LoadIconW")
+	pMessageBox 				 = u32.NewProc("MessageBox")
 	pPostMessage                 = u32.NewProc("PostMessageW")
 	pPostQuitMessage             = u32.NewProc("PostQuitMessage")
 	pRegisterClass               = u32.NewProc("RegisterClassExW")
@@ -980,4 +981,18 @@ func newGUID() windows.GUID {
 	var buf [16]byte
 	rand.Read(buf[:])
 	return *(*windows.GUID)(unsafe.Pointer(&buf[0]))
+}
+
+func ShowDialog(title string, text string) {
+	const MB_ICONERROR = 0x00000010
+	const MB_OK = 0x00000000
+	res, _, err := pMessageBox.Call(
+		wt.window,
+		windows.StringToUTF16(text),
+		windows.StringToUTF16(title),
+		MB_OK | MB_ICONERROR
+	)
+	if res == 0 {
+		log.Printf("Unable to show dialog: %v\n", err)
+	}
 }

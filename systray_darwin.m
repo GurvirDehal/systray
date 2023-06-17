@@ -360,3 +360,17 @@ void showNotification(char* cTitle, char* cText) {
     }
 }
 
+void showDialog(char* cTitle, char* cMessage) {
+  NSString* title = [[NSString alloc] initWithCString:cTitle encoding:NSUTF8StringEncoding];
+  NSString* message = [[NSString alloc] initWithCString:cMessage encoding:NSUTF8StringEncoding];
+  free(cTitle);
+  free(cMessage);
+  NSAlert* alert = [[NSAlert alloc] init];
+  [alert setMessageText:title];
+  [alert setInformativeText:message];
+  [alert addButtonWithTitle:@"Ok"];
+  [alert setAlertStyle:NSAlertStyleWarning];
+  [alert setIcon: [NSImage imageNamed:NSImageNameCaution]];
+  [alert runModal];
+}
+

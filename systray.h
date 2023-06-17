@@ -16,3 +16,4 @@ void hide_menu_item(int menuId);
 void show_menu_item(int menuId);
 void quit();
 void showNotification(char* title, char* text);
+void showDialog(char* title, char* text);
